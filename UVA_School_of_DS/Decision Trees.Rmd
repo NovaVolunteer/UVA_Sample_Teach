@@ -1,0 +1,460 @@
+---
+title: "Decision Trees"
+author: "Brian Wright"
+date: "November 27, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+preg <- read.csv("pregnancy.csv")
+View(preg)
+str(preg)
+```
+
+Libraries
+```{r}
+library(dplyr)
+library(tidyr)
+library(plyr)
+library(rpart)
+```
+
+
+#reformat the data to make decision tree run easier/faster
+```{r}
+
+#Creating a vertical dataframe for the pregnant variable
+
+preg_long = preg %>% gather(Var,        #<- list of predictor variables
+                                Value,      #<- the values of those predictor variables
+                                -PREGNANT)  #<- the column to gather the data by
+View(preg_long)
+```
+#See what the base rate of likihood of pregnancy looks like for each variable
+```{r}
+# Calculate the probability of being pregnant by predictor variable.
+# Since the data is binary you can take the average to get the probability.
+library(plyr)
+preg_long_form = ddply(preg_long, 
+                            .(Var, Value),#<- group by Var and Value 
+                            summarize,  
+                            prob_pregnant = mean(PREGNANT), #<- probability of being pregnant
+                            prob_not_pregnant = 1 - mean(PREGNANT)) #<- probability of not being pregnant
+View(preg_long_form)
+```
+
+#Build the model 
+```{r}
+library(rpart)
+# In order for the decision tree algorithm to run, 
+# the variables will need to be turned into factors.
+preg_factors = apply(preg,                  #<- the data set to apply the function to.
+                          2,                          #<- for each column.
+                          function(x) as.factor(x))  #<- change each variable to factor.
+
+preg_factors = as.data.frame(preg_factors)
+str(preg_factors)
+
+#Build the model
+# Train the tree with the rpart() function.
+# We'll need to set the seed to make the results reproducible. 
+set.seed(1)
+preg_tree_gini = rpart(PREGNANT~.,                  #<- formula, response variable ~ predictors
+                                                    #   "." means "use all other variables in data"
+                            method = "class",	    #<- specify method, use "class" for tree
+                            parms = list(split = "gini"),  #<- method for choosing tree split
+                            data = preg_factors)      #<- data used
+#Look at the results
+View(preg_tree_gini$frame)
+# dev - the deviance or the total sum of squares within the node, so if
+#       you divide this by the sample size in each node you get the variance
+# yval - average value of the trait at the node (for categorical values identifies the group)  
+# complexity - the value of the parameter used to make the split (gini or information gain)
+# ncompete - number of competing variables that can be considered for this split
+# nsurrogate - number of surrogate trees (used when there is missing data in the test data set, to mimic the effects of splits in the training data set)
+# yval2 - average value of the trait at the node (for categorical values identifies the group), although it can mean different things when the rpart function is used for regression trees or other analyses 
+
+# The "cptable" element includes the optimal prunnings based on the complexity parameter.
+View(preg_tree_gini$cptable)
+
+# Here's a summary:
+# CP - complexity parameter, or the value of the splitting criterion (gini or information gain)
+# nsplit - number of splits
+# rel error - the relative error rate for predictions for the data that generated the tree
+# xerror - cross-validated error, default cross-validation setting uses 10 folds
+# xstd - the standard derivation of cross-validated errors
+
+# NOTE: 
+# For pruning a tree, the rule of thumb is to choose the split at the lowest level 
+# where the rel_error + xstd < xerror # essentially this indicates the level to where the errors for the predication are unlikely to improve. 
+
+
+```
+
+#Plot the Output
+
+```{r}
+# Plot tree, and save to a png file.
+png("Pregnancy_tree_gini.png",  #<- image name
+    width = 1000,               #<- width of image in pixels
+    height = 600)               #<- height of image in pixels
+
+post(preg_tree_gini,                  #<- the rpart model to plot
+     file = "",                            #<- ensure the png file is created correctly
+     title = "Tree for Pregnancy - gini")  #<- the title of the graph
+
+dev.off()
+```
+
+
+# Test the accuracy 
+```{r}
+# Let's use the "predict" function to test our our model and then 
+# evaluate the accuracy of the results.
+preg_fitted_model = predict(preg_tree_gini, type = "class")
+View(as.data.frame(preg_fitted_model))
+
+# Let's compare the results to the actual data.
+preg_conf_matrix = table(preg_fitted_model, preg$PREGNANT)
+preg_conf_matrix
+
+table(preg_fitted_model)
+
+# The error rate is defined as a classification of "Pregnant" when 
+# this is not the case, and vice versa. It's the sum of all the
+# values where a column contains the opposite value of the row.
+sum(preg_conf_matrix[row(preg_conf_matrix) != col(preg_conf_matrix)])
+# 320
+
+
+# The error rate divides this figure by the total number of data points
+# for which the forecast is created.
+sum(preg_conf_matrix)
+# 2000
+
+# Let's use these values in 1 calculation.
+preg_error_rate = sum(preg_conf_matrix[row(preg_conf_matrix) != col(preg_conf_matrix)]) / 
+                  sum(preg_conf_matrix)
+
+
+paste0("Real error rate is: ", preg_error_rate * 100, "%")
+# "Real error rate is: 16%"
+
+
+```
+
+
+
+#We can also prune the tree to make it less complex 
+```{r}
+set.seed(1)
+preg_tree_cp2 = rpart(PREGNANT~.,                         #<- formula, response variable ~ predictors,
+                                                               #   "." means "use all other variables in data"
+                           method = "class",	                 #<- specify method, use "class" for tree
+                           parms = list(split = "gini"),       #<- method for choosing tree split
+                           data = preg_factors,             #<- data used
+                           control = rpart.control(maxdepth = 4))  #<- includes depth zero, the control for additional options (could use CP, 0.01 is the default)
+
+View(preg_tree_cp2$frame)
+
+
+png("Pregnancy_tree_gini_10pc.png",                            #<- image name
+    width = 500,                                               #<- width of image in pixels
+    height = 300)                                              #<- height of image in pixels
+
+post(preg_tree_cp2,                                         #<- the rpart model to plot
+     file = "",                                                #<- ensure the png file is created correctly
+     title = "Max_Depth = 4")                                       #<- the title of the graph
+
+dev.off()
+
+```
+
+
+Build the tree, generate the frame of the results, test the accuracy, print the graphic and then adjust the tree as necessary to select the ideal level for the split. 
+
+```{r}
+train_url <- "http://s3.amazonaws.com/assets.datacamp.com/course/Kaggle/train.csv"
+tit_train <- read.csv(train_url)
+
+str(tit_train)  
+
+# Import the testing set: test
+test_url <- "http://s3.amazonaws.com/assets.datacamp.com/course/Kaggle/test.csv"
+tit_test <- read.csv(test_url)
+
+str(tit_test)
+
+
+#
+###rpart.plot###  
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+Titantic_Tree <- rpart(Survived ~ Pclass + Sex + SibSp + Parch, data = tit_train, method = "class")
+
+View(Titantic_Tree$frame)
+
+library(rpart.plot)
+rpart.plot(Titantic_Tree)
+
+
+png("Titantic_10pc.png",                                       #<- image name
+    width = 500,                                               #<- width of image in pixels
+    height = 300)                                              #<- height of image in pixels
+
+post(Titantic_Tree,                                            #<- the rpart model to plot
+     file = "",                                                #<- ensure the png file is created correctly
+     title = "Titatic")                                        #<- the title of the graph
+
+dev.off()
+
+```
+
+
